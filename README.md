@@ -1,4 +1,4 @@
-# 채용연계형 인턴 평가시스템 (Apps Script + Google Sheets + GitHub Pages)
+# 채용연계형 인턴 평가시스템 (Apps Script + Google Sheets + GitHub Pages) ff
 
 설계서: `인턴평가시스템 웹 구현 설계서(v2).md` 기준 구현. 인증은 Google Sign-In(ID 토큰 서버 검증) 방식(IDTOKEN 모드)이 기본값이며, Workspace 도메인 환경이면 `AUTH_MODE`를 `WORKSPACE`로 바꿔 `Session.getActiveUser()` 방식으로 전환 가능하다.
 
