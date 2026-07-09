@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>인사부서 대시보드</title>
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+  <div class="container">
+    <div class="card">
+      <h2>전체 현황</h2>
+      <table>
+        <thead>
+          <tr><th>성명</th><th>현장</th><th>상태</th><th>합계점수</th><th>위험요인</th><th>평가상태</th><th>미확인기록</th><th>자동판정 제안</th><th></th></tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="9" class="muted-text">불러오는 중...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="decisionCard" style="display:none;">
+      <h2>전환심의 · 수습결과 확정 — <span id="decisionInternName"></span></h2>
+      <label>구분</label>
+      <select id="decisionType">
+        <option value="전환심의">전환심의 (6주차)</option>
+        <option value="수습종료평가">수습종료평가 (12주차)</option>
+      </select>
+
+      <label>결과</label>
+      <select id="decisionResult"></select>
+
+      <label>비고</label>
+      <textarea id="decisionNote"></textarea>
+
+      <button class="btn orange" onclick="submitDecision()">확정 저장</button>
+      <div id="decisionMsg" class="error"></div>
+    </div>
+  </div>
+
+  <script src="../js/config.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script>
+    let CURRENT_USER = null;
+    let SELECTED_INTERN_ID = null;
+    const RESULT_OPTIONS = {
+      '전환심의': ['전환권고', '조건부전환', '전환신중', '미전환권고'],
+      '수습종료평가': ['정상종료', '보완필요', '집중관리필요', '중대문제발생']
+    };
+
+    (async function init() {
+      CURRENT_USER = guardPage('hr');
+      if (!CURRENT_USER) return;
+      renderTopbar(CURRENT_USER, '인사부서 대시보드');
+      await loadDashboard();
+
+      document.getElementById('decisionType').addEventListener('change', refreshResultOptions);
+      refreshResultOptions();
+    })();
+
+    async function loadDashboard() {
+      const data = await callApi('getDashboard', {});
+      const rows = data.rows.map(function (r) {
+        const riskCls = r.riskMaxLevel === '중대' ? 'danger' : (r.riskMaxLevel === '주의' ? 'warn' : 'ok');
+        const suggestion = r.suggestion ? '<span class="badge orange" style="background:#FBE7DC;color:#D65A31;">' + r.suggestion.result + '</span>' : '<span class="muted-text">-</span>';
+        return '<tr>' +
+          '<td>' + r.intern.name + '</td>' +
+          '<td>' + r.intern.site + '</td>' +
+          '<td>' + r.intern.status + '</td>' +
+          '<td>' + (r.totalScore !== null ? r.totalScore : '-') + '</td>' +
+          '<td><span class="badge ' + riskCls + '">' + r.riskMaxLevel + '</span> (주의 ' + r.riskCautionCount + '건)</td>' +
+          '<td>' + r.evalStatus + '</td>' +
+          '<td>' + r.unconfirmedLogs + '건</td>' +
+          '<td>' + suggestion + '</td>' +
+          '<td><button class="btn secondary" onclick="openDecision(\'' + r.intern.intern_id + '\',\'' + r.intern.name + '\')">심의 입력</button></td>' +
+          '</tr>';
+      }).join('');
+      document.getElementById('rows').innerHTML = rows || '<tr><td colspan="9" class="muted-text">데이터가 없습니다.</td></tr>';
+    }
+
+    function refreshResultOptions() {
+      const type = document.getElementById('decisionType').value;
+      const sel = document.getElementById('decisionResult');
+      sel.innerHTML = RESULT_OPTIONS[type].map(function (r) { return '<option value="' + r + '">' + r + '</option>'; }).join('');
+    }
+
+    function openDecision(internId, name) {
+      SELECTED_INTERN_ID = internId;
+      document.getElementById('decisionInternName').textContent = name;
+      document.getElementById('decisionCard').style.display = 'block';
+      document.getElementById('decisionCard').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    async function submitDecision() {
+      const msg = document.getElementById('decisionMsg');
+      msg.textContent = '';
+      try {
+        await callApi('submitDecision', {
+          intern_id: SELECTED_INTERN_ID,
+          decision_type: document.getElementById('decisionType').value,
+          result: document.getElementById('decisionResult').value,
+          note: document.getElementById('decisionNote').value
+        });
+        alert('확정되었습니다.');
+        document.getElementById('decisionCard').style.display = 'none';
+        document.getElementById('decisionNote').value = '';
+        await loadDashboard();
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+    }
+  </script>
+</body>
+</html>

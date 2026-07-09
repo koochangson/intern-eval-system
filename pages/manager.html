@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>현장소장 대시보드</title>
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+  <div class="container">
+    <div class="card">
+      <h2>담당 현장 인턴</h2>
+      <select id="internSelect" onchange="loadIntern()"></select>
+    </div>
+
+    <div id="detailArea" style="display:none;">
+      <div class="card">
+        <h2>위험요인 최종 확인</h2>
+        <table>
+          <thead><tr><th>항목</th><th>현재 단계</th><th>구체적 사실</th></tr></thead>
+          <tbody id="riskRows"></tbody>
+        </table>
+        <p class="muted-text">위험요인은 멘토·현장소장 누구든 갱신할 수 있습니다. 값이 다르면 현장 관찰을 근거로 아래에서 직접 조정하세요.</p>
+        <div id="riskEditArea"></div>
+      </div>
+
+      <div class="card">
+        <h2>역량평가 확정</h2>
+        <div id="mentorSummary" class="notice"></div>
+        <div id="areaForms"></div>
+        <div class="score-box"><span class="num" id="totalScore">0</span><span>/ 100점 (현장소장 확정 점수)</span></div>
+        <label>조정 사유 (멘토와 2단계 이상 차이나는 영역이 있으면 필수)</label>
+        <textarea id="adjustReason"></textarea>
+        <button class="btn orange" onclick="confirmEval()">확정</button>
+        <div id="evalMsg" class="error"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/config.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script>
+    let CURRENT_USER = null;
+    let CURRENT_DETAIL = null;
+    let AREA_STATE = [null, null, null, null, null];
+    const AREA_LABELS = ['① 기본 근무태도 (20점)', '② 학습태도 및 피드백 수용 (25점)', '③ 현장 적응 및 협업 (20점)', '④ 업무수행 기초역량 (25점)', '⑤ 성장가능성 및 직무적합성 (10점)'];
+    const AREA_POINTS = [20, 25, 20, 25, 10];
+    const SCORE_RATIO = { 4: 1.00, 3: 0.85, 2: 0.60, 1: 0.30 };
+    const RISK_ITEMS = ['근태 문제', '지시사항 불이행', '허위보고', '피드백 후 미개선', '협업상 우려', '직무 관심 부족', '책임감 부족'];
+
+    (async function init() {
+      CURRENT_USER = guardPage('manager');
+      if (!CURRENT_USER) return;
+      renderTopbar(CURRENT_USER, '현장소장 대시보드');
+      const interns = await callApi('listInterns', {});
+      const sel = document.getElementById('internSelect');
+      sel.innerHTML = '<option value="">— 인턴 선택 —</option>' +
+        interns.map(function (i) { return '<option value="' + i.intern_id + '">' + i.name + ' (' + i.site + ')</option>'; }).join('');
+    })();
+
+    async function loadIntern() {
+      const id = document.getElementById('internSelect').value;
+      if (!id) { document.getElementById('detailArea').style.display = 'none'; return; }
+      document.getElementById('detailArea').style.display = 'block';
+      CURRENT_DETAIL = await callApi('getInternDetail', { intern_id: id });
+      renderRisk();
+      renderEval();
+    }
+
+    function renderRisk() {
+      const map = {};
+      CURRENT_DETAIL.risks.forEach(function (r) { map[r.item] = r; });
+      const rows = RISK_ITEMS.map(function (item) {
+        const cur = map[item] || { level: '해당없음', evidence: '' };
+        const cls = cur.level === '중대' ? 'danger' : (cur.level === '주의' ? 'warn' : 'ok');
+        return '<tr><td>' + item + '</td><td><span class="badge ' + cls + '">' + cur.level + '</span></td><td>' + escapeHtml(cur.evidence) + '</td></tr>';
+      }).join('');
+      document.getElementById('riskRows').innerHTML = rows;
+
+      const editHtml = RISK_ITEMS.map(function (item) {
+        const cur = map[item] || { level: '해당없음', evidence: '' };
+        const options = ['해당없음', '주의', '중대'].map(function (lv) {
+          return '<option value="' + lv + '" ' + (cur.level === lv ? 'selected' : '') + '>' + lv + '</option>';
+        }).join('');
+        const safeItem = item.replace(/'/g, "\\'");
+        return '<div class="grid cols-3" style="align-items:end;margin-bottom:8px;">' +
+          '<div><label style="margin:0;">' + item + '</label></div>' +
+          '<div><select id="risklv-' + item + '">' + options + '</select></div>' +
+          '<div style="display:flex;gap:6px;"><input type="text" id="riskev-' + item + '" value="' + escapeHtml(cur.evidence) + '" placeholder="구체적 사실" />' +
+          '<button class="btn secondary" onclick="saveRisk(\'' + safeItem + '\')">저장</button></div></div>';
+      }).join('');
+      document.getElementById('riskEditArea').innerHTML = editHtml;
+    }
+
+    async function saveRisk(item) {
+      const level = document.getElementById('risklv-' + item).value;
+      const evidence = document.getElementById('riskev-' + item).value;
+      try {
+        await callApi('submitRisk', { intern_id: CURRENT_DETAIL.intern.intern_id, item: item, level: level, evidence: evidence });
+        await loadIntern();
+      } catch (e) { alert(e.message); }
+    }
+
+    function renderEval() {
+      const ev = CURRENT_DETAIL.competencyEvals[0];
+      if (!ev) {
+        document.getElementById('mentorSummary').textContent = '멘토가 아직 1차 평가를 제출하지 않았습니다.';
+        document.getElementById('areaForms').innerHTML = '';
+        return;
+      }
+      const mentorLevels = [ev.area1_score, ev.area2_score, ev.area3_score, ev.area4_score, ev.area5_score].map(Number);
+      document.getElementById('mentorSummary').textContent =
+        '멘토 1차 제출: ' + mentorLevels.join(' / ') + ' (합계 ' + ev.total_score + '점) · 상태: ' + ev.final_status;
+
+      AREA_STATE = ev.manager_total_score
+        ? [ev.manager_area1_score, ev.manager_area2_score, ev.manager_area3_score, ev.manager_area4_score, ev.manager_area5_score].map(Number)
+        : mentorLevels.slice();
+
+      const html = AREA_LABELS.map(function (label, i) {
+        const btns = [4, 3, 2, 1].map(function (lv) {
+          return '<button type="button" class="' + (AREA_STATE[i] === lv ? 'active' : '') + '" onclick="setLevel(' + i + ',' + lv + ')">' + lv + '점</button>';
+        }).join('');
+        return '<h3>' + label + ' <span class="muted-text">(멘토: ' + mentorLevels[i] + '점)</span></h3>' +
+          '<div class="level-btns" id="levelbtns-' + i + '">' + btns + '</div>';
+      }).join('');
+      document.getElementById('areaForms').innerHTML = html;
+      updateTotal();
+    }
+
+    function setLevel(areaIdx, level) {
+      AREA_STATE[areaIdx] = level;
+      const wrap = document.getElementById('levelbtns-' + areaIdx);
+      Array.from(wrap.children).forEach(function (btn, idx) {
+        const lv = [4, 3, 2, 1][idx];
+        btn.className = (lv === level) ? 'active' : '';
+      });
+      updateTotal();
+    }
+
+    function updateTotal() {
+      let total = 0;
+      AREA_STATE.forEach(function (lv, i) { total += Math.round(AREA_POINTS[i] * SCORE_RATIO[lv]); });
+      document.getElementById('totalScore').textContent = total;
+    }
+
+    async function confirmEval() {
+      const msg = document.getElementById('evalMsg');
+      msg.textContent = '';
+      try {
+        await callApi('confirmCompetencyEval', {
+          intern_id: CURRENT_DETAIL.intern.intern_id,
+          manager_levels: AREA_STATE,
+          adjust_reason: document.getElementById('adjustReason').value
+        });
+        alert('확정되었습니다.');
+        await loadIntern();
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s || '').replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+  </script>
+</body>
+</html>

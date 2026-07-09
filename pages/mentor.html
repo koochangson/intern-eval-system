@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>멘토 대시보드</title>
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+  <div class="container">
+    <div class="card">
+      <h2>담당 인턴</h2>
+      <select id="internSelect" onchange="loadIntern()"></select>
+    </div>
+
+    <div id="detailArea" style="display:none;">
+      <div class="card">
+        <h2>주간 활동기록 확인·코멘트</h2>
+        <table>
+          <thead><tr><th>주차</th><th>주요 수행업무</th><th>애로사항</th><th>코멘트</th><th></th></tr></thead>
+          <tbody id="logRows"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>역량평가서 (1차 · 멘토)</h2>
+        <div class="notice">각 영역에서 관찰된 사실과 가장 가까운 단계를 선택하세요. 4점·1점을 선택하면 근거 작성이 필수입니다. 전 영역 3점 이상이어도 최저 영역 1곳은 근거를 반드시 기재해야 합니다.</div>
+        <div id="areaForms"></div>
+        <div class="score-box"><span class="num" id="totalScore">0</span><span>/ 100점 (자동 계산)</span></div>
+        <button class="btn" onclick="submitEval()">멘토 평가 제출</button>
+        <div id="evalMsg" class="error"></div>
+      </div>
+
+      <div class="card">
+        <h2>위험요인 체크</h2>
+        <table>
+          <thead><tr><th>항목</th><th>단계</th><th>구체적 사실</th><th></th></tr></thead>
+          <tbody id="riskRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/config.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script>
+    let CURRENT_USER = null;
+    let INTERNS = [];
+    const AREA_LABELS = ['① 기본 근무태도 (20점)', '② 학습태도 및 피드백 수용 (25점)', '③ 현장 적응 및 협업 (20점)', '④ 업무수행 기초역량 (25점)', '⑤ 성장가능성 및 직무적합성 (10점)'];
+    const AREA_POINTS = [20, 25, 20, 25, 10];
+    const SCORE_RATIO = { 4: 1.00, 3: 0.85, 2: 0.60, 1: 0.30 };
+    const RISK_ITEMS = ['근태 문제', '지시사항 불이행', '허위보고', '피드백 후 미개선', '협업상 우려', '직무 관심 부족', '책임감 부족'];
+
+    (async function init() {
+      CURRENT_USER = guardPage('mentor');
+      if (!CURRENT_USER) return;
+      renderTopbar(CURRENT_USER, '멘토 대시보드');
+      INTERNS = await callApi('listInterns', {});
+      const sel = document.getElementById('internSelect');
+      sel.innerHTML = '<option value="">— 인턴 선택 —</option>' +
+        INTERNS.map(function (i) { return '<option value="' + i.intern_id + '">' + i.name + ' (' + i.site + ')</option>'; }).join('');
+    })();
+
+    let CURRENT_DETAIL = null;
+    let AREA_STATE = [null, null, null, null, null];
+
+    async function loadIntern() {
+      const id = document.getElementById('internSelect').value;
+      if (!id) { document.getElementById('detailArea').style.display = 'none'; return; }
+      document.getElementById('detailArea').style.display = 'block';
+      CURRENT_DETAIL = await callApi('getInternDetail', { intern_id: id });
+      renderLogs();
+      renderAreaForms();
+      renderRisk();
+    }
+
+    function renderLogs() {
+      const rows = CURRENT_DETAIL.activityLogs.map(function (l) {
+        return '<tr><td>' + l.week_no + '주차</td><td>' + escapeHtml(l.tasks) + '</td><td>' + escapeHtml(l.issues) + '</td>' +
+          '<td><input type="text" id="cmt-' + l.log_id + '" value="' + escapeHtml(l.mentor_comment || '') + '" /></td>' +
+          '<td><button class="btn secondary" onclick="saveComment(\'' + l.log_id + '\')">저장</button></td></tr>';
+      }).join('');
+      document.getElementById('logRows').innerHTML = rows || '<tr><td colspan="5" class="muted-text">활동기록이 없습니다.</td></tr>';
+    }
+
+    async function saveComment(logId) {
+      const comment = document.getElementById('cmt-' + logId).value;
+      await callApi('mentorCommentActivityLog', { log_id: logId, comment: comment });
+      alert('저장되었습니다.');
+    }
+
+    function renderAreaForms() {
+      const existing = CURRENT_DETAIL.competencyEvals[0];
+      AREA_STATE = existing
+        ? [existing.area1_score, existing.area2_score, existing.area3_score, existing.area4_score, existing.area5_score].map(Number)
+        : [null, null, null, null, null];
+      const evidences = existing
+        ? [existing.area1_evidence, existing.area2_evidence, existing.area3_evidence, existing.area4_evidence, existing.area5_evidence]
+        : ['', '', '', '', ''];
+
+      const html = AREA_LABELS.map(function (label, i) {
+        const btns = [4, 3, 2, 1].map(function (lv) {
+          return '<button type="button" class="' + (AREA_STATE[i] === lv ? 'active' : '') + '" onclick="setLevel(' + i + ',' + lv + ')">' + lv + '점</button>';
+        }).join('');
+        return '<h3>' + label + '</h3>' +
+          '<div class="level-btns" id="levelbtns-' + i + '">' + btns + '</div>' +
+          '<textarea id="evidence-' + i + '" placeholder="근거(관찰된 사실)를 적어주세요.">' + escapeHtml(evidences[i]) + '</textarea>';
+      }).join('');
+      document.getElementById('areaForms').innerHTML = html;
+      updateTotal();
+    }
+
+    function setLevel(areaIdx, level) {
+      AREA_STATE[areaIdx] = level;
+      const wrap = document.getElementById('levelbtns-' + areaIdx);
+      Array.from(wrap.children).forEach(function (btn, idx) {
+        const lv = [4, 3, 2, 1][idx];
+        btn.className = (lv === level) ? 'active' : '';
+      });
+      updateTotal();
+    }
+
+    function updateTotal() {
+      let total = 0;
+      let complete = true;
+      AREA_STATE.forEach(function (lv, i) {
+        if (!lv) { complete = false; return; }
+        total += Math.round(AREA_POINTS[i] * SCORE_RATIO[lv]);
+      });
+      document.getElementById('totalScore').textContent = complete ? total : '-';
+    }
+
+    async function submitEval() {
+      const msg = document.getElementById('evalMsg');
+      msg.textContent = '';
+      if (AREA_STATE.some(function (v) { return !v; })) {
+        msg.textContent = '5개 영역을 모두 체크해주세요.';
+        return;
+      }
+      const evidences = [0, 1, 2, 3, 4].map(function (i) { return document.getElementById('evidence-' + i).value; });
+      try {
+        await callApi('submitCompetencyEval', {
+          intern_id: CURRENT_DETAIL.intern.intern_id,
+          levels: AREA_STATE,
+          evidences: evidences
+        });
+        alert('제출되었습니다.');
+        await loadIntern();
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+    }
+
+    function renderRisk() {
+      const map = {};
+      CURRENT_DETAIL.risks.forEach(function (r) { map[r.item] = r; });
+      const rows = RISK_ITEMS.map(function (item) {
+        const cur = map[item] || { level: '해당없음', evidence: '' };
+        const options = ['해당없음', '주의', '중대'].map(function (lv) {
+          return '<option value="' + lv + '" ' + (cur.level === lv ? 'selected' : '') + '>' + lv + '</option>';
+        }).join('');
+        const safeItem = item.replace(/'/g, "\\'");
+        return '<tr><td>' + item + '</td>' +
+          '<td><select id="risklv-' + item + '">' + options + '</select></td>' +
+          '<td><input type="text" id="riskev-' + item + '" value="' + escapeHtml(cur.evidence) + '" /></td>' +
+          '<td><button class="btn secondary" onclick="saveRisk(\'' + safeItem + '\')">저장</button></td></tr>';
+      }).join('');
+      document.getElementById('riskRows').innerHTML = rows;
+    }
+
+    async function saveRisk(item) {
+      const level = document.getElementById('risklv-' + item).value;
+      const evidence = document.getElementById('riskev-' + item).value;
+      try {
+        await callApi('submitRisk', { intern_id: CURRENT_DETAIL.intern.intern_id, item: item, level: level, evidence: evidence });
+        alert('저장되었습니다.');
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s || '').replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+  </script>
+</body>
+</html>

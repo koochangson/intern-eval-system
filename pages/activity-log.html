@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>주간 활동기록 — 인턴</title>
+<link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+  <div class="topbar" id="topbar"></div>
+  <div class="container">
+    <div class="notice">활동기록은 주 1회(매주 금요일 기준) 작성을 원칙으로 하며, 소급 작성을 지양합니다. 작성된 기록은 6주차 역량평가의 근거자료로 활용됩니다.</div>
+
+    <div class="card">
+      <h2>주간 활동기록 작성</h2>
+      <label>작성 대상 주차</label>
+      <select id="weekNo"></select>
+
+      <label>작성일</label>
+      <input type="date" id="logDate" />
+
+      <label>주요 수행업무</label>
+      <textarea id="tasks" placeholder="이번 주 수행한 주요 업무를 적어주세요."></textarea>
+
+      <label>학습·습득 내용</label>
+      <textarea id="learning" placeholder="새로 배우거나 익힌 내용을 적어주세요."></textarea>
+
+      <label>애로사항·질문</label>
+      <textarea id="issues" placeholder="어려웠던 점이나 멘토에게 묻고 싶은 것을 적어주세요."></textarea>
+
+      <button class="btn" onclick="submitLog()">저장</button>
+      <div id="formMsg" class="error"></div>
+    </div>
+
+    <div class="card">
+      <h2>내 활동기록 이력</h2>
+      <table>
+        <thead><tr><th>주차</th><th>작성일</th><th>주요 수행업무</th><th>멘토 코멘트</th></tr></thead>
+        <tbody id="logRows"><tr><td colspan="4" class="muted-text">불러오는 중...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="../js/config.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script>
+    let CURRENT_USER = null;
+
+    (async function init() {
+      CURRENT_USER = guardPage('intern');
+      if (!CURRENT_USER) return;
+      renderTopbar(CURRENT_USER, '주간 활동기록');
+
+      const weekSel = document.getElementById('weekNo');
+      for (let i = 1; i <= 12; i++) {
+        const opt = document.createElement('option');
+        opt.value = i; opt.textContent = i + '주차';
+        weekSel.appendChild(opt);
+      }
+      document.getElementById('logDate').valueAsDate = new Date();
+
+      await loadLogs();
+    })();
+
+    async function loadLogs() {
+      try {
+        const detail = await callApi('getInternDetail', { intern_id: CURRENT_USER.user_id });
+        const rows = detail.activityLogs.map(function (l) {
+          return '<tr><td>' + l.week_no + '주차</td><td>' + (l.log_date || '') + '</td>' +
+            '<td>' + escapeHtml(l.tasks) + '</td>' +
+            '<td>' + (l.mentor_comment ? escapeHtml(l.mentor_comment) : '<span class="badge muted">미확인</span>') + '</td></tr>';
+        }).join('');
+        document.getElementById('logRows').innerHTML = rows || '<tr><td colspan="4" class="muted-text">작성된 기록이 없습니다.</td></tr>';
+      } catch (e) {
+        document.getElementById('logRows').innerHTML = '<tr><td colspan="4" class="error">' + e.message + '</td></tr>';
+      }
+    }
+
+    async function submitLog() {
+      const msg = document.getElementById('formMsg');
+      msg.textContent = '';
+      try {
+        await callApi('submitActivityLog', {
+          intern_id: CURRENT_USER.user_id,
+          week_no: document.getElementById('weekNo').value,
+          log_date: document.getElementById('logDate').value,
+          tasks: document.getElementById('tasks').value,
+          learning: document.getElementById('learning').value,
+          issues: document.getElementById('issues').value
+        });
+        document.getElementById('tasks').value = '';
+        document.getElementById('learning').value = '';
+        document.getElementById('issues').value = '';
+        await loadLogs();
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s || '').replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+  </script>
+</body>
+</html>
